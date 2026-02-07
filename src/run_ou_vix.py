@@ -20,10 +20,9 @@ def max_drawdown(cum: np.ndarray) -> float:
     return float(dd.min())
 
 if __name__ == "__main__":
-    # 1) Put your VIX CSV inside repo_root/data/
-    # 2) Set the filename here:
+    
     VIX_PATH = "data/VIX_History.csv"
- # <-- change if your file has a different name
+    
 
     s = load_vix_csv(VIX_PATH)
     x_level = s.values.astype(float)
