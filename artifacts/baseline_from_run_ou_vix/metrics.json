@@ -1,0 +1,22 @@
+{
+  "data_points": 9117,
+  "start": "1990-01-02",
+  "end": "2026-02-06",
+  "window": 126.0,
+  "dt": 1.0,
+  "split_date": "2006-01-01",
+  "total_pnl_additive": 2.9480316164244553,
+  "sharpe_full": 1.238393740192662,
+  "max_dd_additive": -0.15265492327604058,
+  "final_wealth_full": 17.610137824212693,
+  "cagr_full": 0.08271126453852529,
+  "max_dd_wealth_full": -0.1482249789479434,
+  "sharpe_train": 1.6592529138453453,
+  "sharpe_test": 1.0459572886700488,
+  "final_wealth_test": 4.639141744386575,
+  "cagr_test": 0.07936295635139845,
+  "max_dd_wealth_test": -0.1482249789479434,
+  "n_obs": 9117,
+  "n_train": 4033,
+  "n_test": 5084
+}
