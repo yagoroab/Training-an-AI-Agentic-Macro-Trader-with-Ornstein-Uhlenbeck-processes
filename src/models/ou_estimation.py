@@ -38,8 +38,8 @@ def rolling_ou_params(x: np.ndarray, window: int, dt: float):
     kappa = np.full(n, np.nan)
     sigma = np.full(n, np.nan)
 
-    for t in range(window, n):
-        est = fit_ou_ar1(x[t-window:t], dt=dt)
+    for t in range(window - 1, n):
+        est = fit_ou_ar1(x[t - window + 1 : t + 1], dt=dt)
         mu[t] = est["mu"]
         kappa[t] = est["kappa"]
         sigma[t] = est["sigma"]
