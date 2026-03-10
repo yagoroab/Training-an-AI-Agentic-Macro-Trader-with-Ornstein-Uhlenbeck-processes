@@ -1,90 +1,202 @@
-**Training an AI Agentic Macro Trader with Ornstein–Uhlenbeck Processes**
+Ornstein–Uhlenbeck Mean Reversion Strategy on the VIX
 
-This repository contains the development of my IE University Final Degree Project.
-The goal is to:
+This repository contains the code developed for my IE University Final Degree Project.
 
-1. Simulate a universe of mean-reverting macro asset prices
+The project investigates whether the VIX volatility index can be modeled as a mean-reverting stochastic process and traded systematically using an Ornstein–Uhlenbeck (OU) framework.
 
-using Ornstein–Uhlenbeck (OU) stochastic processes, calibrated and validated through statistical tests.
+The repository implements
 
-2. Build and train an AI agent capable of trading these OU-driven assets
+• rolling estimation of OU parameters
+• a mean-reversion trading strategy derived from OU dynamics
+• a full historical backtest
+• performance diagnostics and robustness checks
 
-by learning profitable mean-reversion strategies from synthetic environments.
+The objective is to evaluate whether OU-driven equilibrium signals contain exploitable structure in volatility markets.
 
-This repo will evolve from early OU testing → to full agentic training.
+Research Contribution
 
-**Current Progress**
-✔️ OU Simulation Validation (Completed)
+This project builds a systematic trading pipeline that models the VIX as a mean-reverting Ornstein–Uhlenbeck process and tests a trading strategy derived from deviations from the estimated equilibrium level.
 
-Implemented OU simulation tests using reference Python libraries
+The implementation combines
 
-Verified correctness of OU paths
+• stochastic process modelling
+• rolling statistical calibration
+• signal generation from equilibrium deviations
+• historical backtesting with risk metrics
 
-Checked calibration methods (MLE / Least Squares)
+Ornstein–Uhlenbeck Model
 
-Confirmed recovery of true parameters from synthetic data
+The VIX is modeled as a continuous-time Ornstein–Uhlenbeck process
 
-Notebook: OU Trials.ipynb
+dX_t = θ(μ − X_t) dt + σ dW_t
 
-**Upcoming Work (Next Steps)**
+Where
 
-Implement custom OU class (src/ou_process.py)
+Parameter	Meaning
+μ	Long-run equilibrium level
+θ	Speed of mean reversion
+σ	Volatility parameter
+W_t	Brownian motion
 
-Build OU parameter estimator (src/ou_estimation.py)
+The model implies that deviations from equilibrium decay exponentially over time.
 
-Generate synthetic multi-asset datasets
+Mean Reversion Property
 
-Create trading environment (Gym-style)
+The expected value of the process evolves as
 
-Implement first-stage agent (baseline mean-reversion strategy)
+E[X_t] = μ + (X_0 − μ) e^(−θt)
 
-Prepare reinforcement learning phase
+This means that any deviation from equilibrium gradually disappears at rate θ.
 
-**Repository Structure**
-notebooks/
-    OU Trials.ipynb           → OU simulation & parameter recovery tests
+Discrete Representation
 
+For estimation purposes, the OU process can be written as a discrete AR(1) process
+
+X_{t+1} = a + b X_t + ε_t
+
+From this representation the OU parameters can be recovered as
+
+θ = −ln(b) / Δt
+μ = a / (1 − b)
+
+This approach allows the parameters to be estimated using standard regression methods.
+
+Trading Signal
+
+The trading signal is based on the standardized deviation from the OU equilibrium.
+
+z_t = (X_t − μ_t) / σ_t
+
+Where
+
+Variable	Meaning
+X_t	log(VIX)
+μ_t	rolling OU equilibrium estimate
+σ_t	OU volatility estimate
+Trading Rule
+
+Positions are determined by the sign of the deviation from equilibrium.
+
+If z_t > 0  → Short volatility
+If z_t < 0  → Long volatility
+
+The intuition is that large deviations from equilibrium tend to revert back toward the long-run mean.
+
+Data
+
+The strategy is tested on historical VIX data from the CBOE.
+
+Dataset characteristics
+
+Feature	Value
+Start date	1990
+End date	2026
+Frequency	Daily
+Variable used	log(VIX)
+
+Using log(VIX) improves statistical stability and better aligns the data with the assumptions of the OU model.
+
+Model Estimation
+
+OU parameters are estimated using rolling window calibration.
+
+For each window the model estimates
+
+• mean reversion speed
+• equilibrium level
+• volatility parameter
+
+This simulates real-time parameter learning and avoids look-ahead bias.
+
+Backtest Framework
+
+The repository implements a complete backtesting pipeline including
+
+• signal generation
+• daily returns
+• cumulative PnL
+• wealth process
+• risk metrics
+
+Key evaluation statistics include
+
+• Sharpe ratio
+• CAGR
+• maximum drawdown
+
+Results
+
+Baseline results of the OU strategy
+
+Metric	Value
+Sharpe Ratio	~1.09
+CAGR	~35.6%
+Max Drawdown	−34.7%
+Final Wealth	~11.6
+
+The strategy captures periods where volatility moves away from equilibrium and subsequently mean-reverts.
+
+These results should be interpreted cautiously since the backtest does not include
+
+• transaction costs
+• slippage
+• volatility derivatives implementation constraints
+
+Repository Structure
 src/
-    (future) ou_process.py    → Custom OU simulator
-    (future) ou_estimation.py → Calibration methods
-    (future) agent.py         → Trading agent logic
 
 data/
-    (future) synthetic datasets
+vix_loader.py
+Load historical VIX data
 
 models/
-    (future) trained agents and saved policies
+ou_estimation.py
+Rolling OU parameter estimation
 
-figures/
-    (future) OU plots, learning curves, diagnostics
+backtest/
+backtest_ou.py
+Mean reversion strategy implementation
 
+plot_ou_results.py
+Visualization of results
 
-Each folder will fill up as the thesis progresses.
+run_ou_vix.py
+Main experiment pipeline
+Running the Experiment
 
-**How to View & Run the Notebooks**
-View online (advisor-friendly):
+Execute the main script
 
-You can open any notebook directly on GitHub — no setup required.
+python -m run_ou_vix
 
-Run locally:
-pip install -r requirements.txt
-jupyter notebook
+The pipeline will
 
+load VIX data
 
-(requirements file will be added later)
+estimate rolling OU parameters
 
-**Thesis Objective (Short Summary)**
+generate trading signals
 
-The objective of this thesis is to:
+run the historical backtest
 
-Model asset prices as stochastic mean-reverting OU processes
+output performance metrics and plots
 
-Estimate OU parameters from synthetic or real-like data
+References
 
-Build a simulated market environment reflecting realistic macro behaviour
+Relevant research on OU processes and mean-reversion trading includes
 
-Train an agent capable of trading based on statistical properties of the OU dynamics
+Holý, V. & Tomanová, P. (2018)
+Estimation of Ornstein–Uhlenbeck process using ultra-high-frequency data with application to intraday pairs trading strategy.
 
+Endres, S. & Stübinger, J. (2019)
+Optimal trading strategies for Lévy-driven Ornstein–Uhlenbeck processes.
+
+Wu, L. (2020)
+Analytic value function for a pairs trading strategy with a Lévy-driven Ornstein–Uhlenbeck process.
+
+Zhu, D. M., Yu, F. & Zhou, X. (2021)
+Optimal pairs trading with dynamic mean-variance objective.
+
+These works show that Ornstein–Uhlenbeck processes provide a tractable framework for modeling equilibrium-seeking financial variables and designing statistical arbitrage strategies.
 Evaluate robustness across volatility regimes, shocks, and changing parameters
 
 This combines stochastic process modeling, reinforcement learning, and financial market structure.
