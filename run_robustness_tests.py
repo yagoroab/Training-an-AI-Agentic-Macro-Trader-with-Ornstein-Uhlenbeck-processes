@@ -31,6 +31,62 @@ RNN_TRADED_END = "2026-02-07"
 RNN_SPLIT_DATE = "2022-05-01"
 
 
+def _build_rnn_case_dataset(feature_df: pd.DataFrame, *, trainer, split_date: str) -> tuple[dict, np.ndarray]:
+    if trainer is train_lstm_classifier:
+        feature_cols = [
+            "log_vix_over_traded",
+            "vix_ret_1",
+            "traded_ret_1",
+            "vix_ret_5",
+            "traded_ret_5",
+            "vix_vol_20",
+            "traded_vol_20",
+        ]
+        sequence_length = 40
+        target_col = "target_ret_3d"
+        pos_threshold = 0.0075
+        neg_threshold = -0.0075
+    else:
+        feature_cols = [
+            "log_vix",
+            "log_traded",
+            "log_vix_over_traded",
+            "vix_ret_1",
+            "traded_ret_1",
+            "vix_ret_5",
+            "traded_ret_5",
+            "vix_ret_10",
+            "traded_ret_10",
+            "vix_ret_20",
+            "traded_ret_20",
+            "vix_vol_20",
+            "traded_vol_20",
+        ]
+        sequence_length = 55
+        target_col = "target_ret_5d"
+        pos_threshold = 0.010
+        neg_threshold = -0.010
+
+    ds = prepare_lstm_dataset(
+        feature_df=feature_df,
+        feature_cols=feature_cols,
+        sequence_length=sequence_length,
+        split_date=split_date,
+        target_col=target_col,
+    )
+    y_class = np.where(ds["y"] > pos_threshold, 1.0, np.where(ds["y"] < neg_threshold, 0.0, np.nan))
+    valid_mask = np.isfinite(y_class)
+    ds = {
+        **ds,
+        "x": ds["x"][valid_mask],
+        "y": ds["y"][valid_mask],
+        "dates": ds["dates"][valid_mask],
+        "traded_price": ds["traded_price"][valid_mask],
+        "train_mask": ds["train_mask"][valid_mask],
+    }
+    return ds, y_class[valid_mask].astype(np.float32)
+
+
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -105,37 +161,7 @@ def run_rnn_case(
     vxx = load_yahoo_adjclose("VXX", start=RNN_DATA_START, end=RNN_TRADED_END).astype(float).sort_index()
 
     feature_df = build_lstm_feature_frame(vix=vix, traded=vxx)
-    feature_cols = [
-        "log_vix",
-        "log_traded",
-        "log_vix_over_traded",
-        "vix_ret_1",
-        "traded_ret_1",
-        "vix_ret_5",
-        "traded_ret_5",
-        "vix_ret_20",
-        "traded_ret_20",
-        "vix_vol_20",
-        "traded_vol_20",
-    ]
-    ds = prepare_lstm_dataset(
-        feature_df=feature_df,
-        feature_cols=feature_cols,
-        sequence_length=60,
-        split_date=split_date,
-        target_col="target_ret_5d",
-    )
-    y_class = np.where(ds["y"] > 0.01, 1.0, np.where(ds["y"] < -0.01, 0.0, np.nan))
-    valid_mask = np.isfinite(y_class)
-    ds = {
-        **ds,
-        "x": ds["x"][valid_mask],
-        "y": ds["y"][valid_mask],
-        "dates": ds["dates"][valid_mask],
-        "traded_price": ds["traded_price"][valid_mask],
-        "train_mask": ds["train_mask"][valid_mask],
-    }
-    y_class = y_class[valid_mask].astype(np.float32)
+    ds, y_class = _build_rnn_case_dataset(feature_df, trainer=trainer, split_date=split_date)
 
     seeds = [7, 42, 99] if ensemble else [seed]
     prob_up_list = []
@@ -149,10 +175,11 @@ def run_rnn_case(
         )
         prob_up_list.append(model.predict(ds["x"], verbose=0).reshape(-1))
     prob_up = np.mean(np.vstack(prob_up_list), axis=0)
+    confidence_scale = float(np.std(prob_up[ds["train_mask"]] - 0.5))
     trade_cfg = (
-        dict(max_leverage=0.30, probability_scale=4.0, deadband=0.10)
+        dict(max_leverage=0.22, probability_scale=1.50, deadband=0.30)
         if trainer is train_lstm_classifier
-        else dict(max_leverage=0.60, probability_scale=6.0, deadband=0.10)
+        else dict(max_leverage=0.50, probability_scale=1.75, deadband=0.20)
     )
 
     bt = backtest_lstm_probabilities(
@@ -164,8 +191,9 @@ def run_rnn_case(
         max_leverage=trade_cfg["max_leverage"],
         probability_scale=trade_cfg["probability_scale"],
         deadband=trade_cfg["deadband"],
-        pos_ema_alpha=0.50,
-        rebalance_thresh=0.05,
+        confidence_scale=confidence_scale,
+        pos_ema_alpha=0.60,
+        rebalance_thresh=0.02,
     )
 
     test_mask = ds["dates"] >= pd.to_datetime(split_date)

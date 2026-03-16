@@ -37,12 +37,16 @@ def build_lstm_feature_frame(vix: pd.Series, traded: pd.Series) -> pd.DataFrame:
     feat["traded_ret_1"] = traded_ret
     feat["vix_ret_5"] = df["vix"].pct_change(5)
     feat["traded_ret_5"] = df["traded"].pct_change(5)
+    feat["vix_ret_10"] = df["vix"].pct_change(10)
+    feat["traded_ret_10"] = df["traded"].pct_change(10)
     feat["vix_ret_20"] = df["vix"].pct_change(20)
     feat["traded_ret_20"] = df["traded"].pct_change(20)
     feat["vix_vol_20"] = vix_ret.rolling(20).std()
     feat["traded_vol_20"] = traded_ret.rolling(20).std()
+    feat["target_ret_3d"] = df["traded"].pct_change(3).shift(-3)
     # Predict a 5-day forward return direction to reduce one-day noise.
     feat["target_ret_5d"] = df["traded"].pct_change(5).shift(-5)
+    feat["target_ret_10d"] = df["traded"].pct_change(10).shift(-10)
     feat["traded"] = df["traded"]
     feat["vix"] = df["vix"]
     return feat.dropna().copy()
@@ -147,7 +151,7 @@ def train_lstm_classifier(
     model = tf.keras.Sequential(
         [
             tf.keras.layers.Input(shape=(x_train.shape[1], x_train.shape[2])),
-            tf.keras.layers.LSTM(16, dropout=0.20, recurrent_dropout=0.00),
+            tf.keras.layers.LSTM(24, dropout=0.20, recurrent_dropout=0.00),
             tf.keras.layers.Dense(8, activation="relu"),
             tf.keras.layers.Dense(1, activation="sigmoid"),
         ]
@@ -191,8 +195,8 @@ def train_gru_classifier(
     model = tf.keras.Sequential(
         [
             tf.keras.layers.Input(shape=(x_train.shape[1], x_train.shape[2])),
-            tf.keras.layers.GRU(16, dropout=0.20, recurrent_dropout=0.00),
-            tf.keras.layers.Dense(8, activation="relu"),
+            tf.keras.layers.GRU(32, dropout=0.15, recurrent_dropout=0.00),
+            tf.keras.layers.Dense(12, activation="relu"),
             tf.keras.layers.Dense(1, activation="sigmoid"),
         ]
     )
@@ -306,6 +310,8 @@ def backtest_lstm_probabilities(
     max_leverage: float = 1.00,
     probability_scale: float = 6.0,
     deadband: float = 0.02,
+    confidence_scale: float | None = None,
+    neutral_probability: float = 0.5,
     pos_ema_alpha: float = 0.50,
     rebalance_thresh: float = 0.10,
 ) -> dict:
@@ -320,6 +326,12 @@ def backtest_lstm_probabilities(
         if traded_price[t - 1] > 0:
             traded_ret[t] = traded_price[t] / traded_price[t - 1] - 1.0
 
+    if confidence_scale is None:
+        prefix_n = min(max(60, n // 3), n)
+        confidence_scale = float(np.std(probability_up[:prefix_n] - float(neutral_probability)))
+    confidence_scale = max(float(confidence_scale), 0.01)
+    neutral_probability = float(neutral_probability)
+
     pos = 0.0
     risky_weight = 0.0
     cash_weight = 1.0
@@ -333,11 +345,12 @@ def backtest_lstm_probabilities(
         ret = traded_ret[t]
         pnl[t] = risky_weight * np.sign(pos) * ret + cash_weight * daily_cash_yield
 
-        centered_prob = float(probability_up[t] - 0.5)
-        if abs(centered_prob) <= deadband:
+        centered_prob = float(probability_up[t] - neutral_probability)
+        normalized_prob = centered_prob / confidence_scale
+        if abs(normalized_prob) <= deadband:
             target_pos = 0.0
         else:
-            signal = np.tanh(probability_scale * centered_prob)
+            signal = np.tanh(probability_scale * normalized_prob)
             target_pos = float(max_leverage * signal)
 
         if abs(target_pos - pos) < rebalance_thresh:
@@ -365,6 +378,8 @@ def backtest_lstm_probabilities(
         "risky_weight": risky_weight_arr,
         "cash_weight": cash_weight_arr,
         "probability_up": probability_up,
+        "confidence_scale": float(confidence_scale),
+        "neutral_probability": neutral_probability,
         "traded_ret": traded_ret,
     }
 
