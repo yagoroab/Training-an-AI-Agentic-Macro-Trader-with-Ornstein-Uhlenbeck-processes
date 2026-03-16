@@ -1,248 +1,161 @@
-Ornstein–Uhlenbeck Mean Reversion Strategy on the VIX
+# Ornstein-Uhlenbeck Mean Reversion on Volatility Markets
 
 This repository contains the code developed for my IE University Final Degree Project.
 
-The project investigates whether the VIX volatility index can be modeled as a mean-reverting stochastic process and traded systematically using an Ornstein–Uhlenbeck (OU) framework.
+The project studies whether volatility markets contain exploitable mean-reverting structure and whether that structure can be traded systematically using an Ornstein-Uhlenbeck (OU) framework. The core benchmark models volatility as a mean-reverting process, generates trading signals from deviations from equilibrium, and trades `VXX` as the tradable volatility proxy.
 
-The repository implements
+In addition to the OU benchmark, the repository includes recurrent neural network baselines (`LSTM` and `GRU`) to test whether more flexible sequence models can outperform the parametric OU approach.
 
-• rolling estimation of OU parameters
-• a mean-reversion trading strategy derived from OU dynamics
-• a full historical backtest
-• performance diagnostics and robustness checks
+## Research Question
 
-The objective is to evaluate whether OU-driven equilibrium signals contain exploitable structure in volatility markets.
+The main question is:
 
-Research Contribution
+Can a rolling Ornstein-Uhlenbeck framework extract a useful equilibrium signal from volatility data and generate trading performance that is competitive with standard benchmarks such as the S&P 500?
 
-This project builds a systematic trading pipeline that models the VIX as a mean-reverting Ornstein–Uhlenbeck process and tests a trading strategy derived from deviations from the estimated equilibrium level.
+A secondary question is:
 
-The implementation combines
+Can recurrent neural networks improve on the OU benchmark, or is the simpler and more interpretable OU model more robust?
 
-• stochastic process modelling
-• rolling statistical calibration
-• signal generation from equilibrium deviations
-• historical backtesting with risk metrics
+## What the Repository Implements
 
-Ornstein–Uhlenbeck Model
+The repository includes:
 
-The VIX is modeled as a continuous-time Ornstein–Uhlenbeck process
+- rolling OU parameter estimation
+- a systematic mean-reversion trading strategy
+- historical backtesting on volatility-linked assets
+- benchmark comparison against `VXX` buy-and-hold and the `S&P 500`
+- robustness tests across parameter changes, transaction costs, split dates, and RNN seeds
+- recurrent neural network baselines (`LSTM` and `GRU`)
 
-dX_t = θ(μ − X_t) dt + σ dW_t
+## Current Strategy Setup
 
-Where
+The current OU benchmark uses:
 
-Parameter	Meaning
-μ	Long-run equilibrium level
-θ	Speed of mean reversion
-σ	Volatility parameter
-W_t	Brownian motion
+- historical `VIX` data as the volatility signal source
+- `VXX` as the traded asset
+- a rolling OU calibration
+- a signal based on the ratio `log(VIX / VXX)`
+- a post-COVID tradable comparison window, starting in May 2020
+- out-of-sample comparisons for RNNs starting in May 2022
 
-The model implies that deviations from equilibrium decay exponentially over time.
+This design was chosen because it aligns the signal with the traded volatility instrument and produces a cleaner benchmark comparison after the COVID shock regime.
 
-Mean Reversion Property
+## Ornstein-Uhlenbeck Model
 
-The expected value of the process evolves as
+The continuous-time OU process is
 
-E[X_t] = μ + (X_0 − μ) e^(−θt)
+\[
+dX_t = \theta(\mu - X_t)\,dt + \sigma\,dW_t
+\]
 
-This means that any deviation from equilibrium gradually disappears at rate θ.
+where:
 
-Discrete Representation
+- `mu` is the long-run equilibrium level
+- `theta` is the speed of mean reversion
+- `sigma` is the diffusion volatility
+- `W_t` is a Brownian motion
 
-For estimation purposes, the OU process can be written as a discrete AR(1) process
+The OU process implies that deviations from equilibrium decay over time. In expectation,
 
-X_{t+1} = a + b X_t + ε_t
+\[
+\mathbb{E}[X_t] = \mu + (X_0 - \mu)e^{-\theta t}
+\]
 
-From this representation the OU parameters can be recovered as
+For estimation, the process is written in discrete AR(1)-style form and estimated on rolling windows.
 
-θ = −ln(b) / Δt
-μ = a / (1 − b)
+## Signal Construction
 
-This approach allows the parameters to be estimated using standard regression methods.
+The benchmark strategy estimates OU parameters on a rolling basis and computes a standardized deviation from the estimated equilibrium:
 
-Trading Signal
+\[
+z_t = \frac{X_t - \mu_t}{\sigma_t}
+\]
 
-The trading signal is based on the standardized deviation from the OU equilibrium.
+In the current implementation:
 
-z_t = (X_t − μ_t) / σ_t
+- `X_t` is the signal `log(VIX / VXX)`
+- `mu_t` is the rolling OU equilibrium estimate
+- `sigma_t` is the rolling OU volatility estimate
 
-Where
+Positions are then mapped from the sign and magnitude of the deviation, with position sizing, leverage caps, transaction costs, and cash allocation handled in the backtest layer.
 
-Variable	Meaning
-X_t	log(VIX)
-μ_t	rolling OU equilibrium estimate
-σ_t	OU volatility estimate
-Trading Rule
+## Data
 
-Positions are determined by the sign of the deviation from equilibrium.
+The project uses:
 
-If z_t > 0  → Short volatility
-If z_t < 0  → Long volatility
+- historical `VIX` data from the included CSV file
+- market data downloaded for `VXX` and benchmark indices such as `^GSPC`
 
-The intuition is that large deviations from equilibrium tend to revert back toward the long-run mean.
+Main assets used:
 
-Data
+- `VIX`: volatility signal source
+- `VXX`: traded volatility proxy
+- `^GSPC`: benchmark equity index
 
-The strategy is tested on historical VIX data from the CBOE.
+## Methodology
 
-Dataset characteristics
+The repository follows this pipeline:
 
-Feature	Value
-Start date	1990
-End date	2026
-Frequency	Daily
-Variable used	log(VIX)
+1. Load historical data
+2. Construct the volatility signal
+3. Estimate rolling OU parameters
+4. Generate trading positions from equilibrium deviations
+5. Backtest the strategy with costs and cash allocation
+6. Compare against benchmarks
+7. Run robustness checks
+8. Compare against RNN baselines
 
-Using log(VIX) improves statistical stability and better aligns the data with the assumptions of the OU model.
+A major focus of the implementation is avoiding forward-looking bias. Signals are formed using information available at time `t` and applied to the next trading period.
 
-Model Estimation
+## Neural Network Extension
 
-OU parameters are estimated using rolling window calibration.
+The repository also includes `LSTM` and `GRU` baselines.
 
-For each window the model estimates
+These models:
 
-• mean reversion speed
-• equilibrium level
-• volatility parameter
+- use lagged volatility and traded-asset features
+- are trained on pre-2022 data
+- are evaluated on a common out-of-sample window
+- are compared directly against the OU strategy and the S&P 500
 
-This simulates real-time parameter learning and avoids look-ahead bias.
+The RNN section is included as an extension to test whether flexible sequence models can outperform the interpretable OU benchmark.
 
-Backtest Framework
+## Main Findings
 
-The repository implements a complete backtesting pipeline including
+The main conclusions from the current experiments are:
 
-• signal generation
-• daily returns
-• cumulative PnL
-• wealth process
-• risk metrics
+- the OU strategy is more stable and interpretable than the RNN alternatives
+- the OU benchmark is competitive with standard benchmarks on some samples, but does not consistently dominate the S&P 500
+- RNNs can occasionally perform well, but their performance is much more sensitive to random seed and split choice
+- the OU strategy appears to be the more robust benchmark for this thesis
 
-Key evaluation statistics include
+This makes the project academically useful even when the OU strategy does not outperform the S&P on every metric: the contribution is not only performance, but also robustness, interpretability, and disciplined out-of-sample evaluation.
 
-• Sharpe ratio
-• CAGR
-• maximum drawdown
+## Repository Structure
 
-Results
-
-Baseline results of the OU strategy
-
-Metric	Value
-Sharpe Ratio	~1.09
-CAGR	~35.6%
-Max Drawdown	−34.7%
-Final Wealth	~11.6
-
-The strategy captures periods where volatility moves away from equilibrium and subsequently mean-reverts.
-
-These results should be interpreted cautiously since the backtest does not include
-
-• transaction costs
-• slippage
-• volatility derivatives implementation constraints
-
-Repository Structure
+```text
 src/
+  backtest/
+    backtest_ou.py            # OU trading/backtest logic
+  config/
+    baseline_config.py        # baseline configuration values
+  data/
+    market_loader.py          # Yahoo Finance loaders
+    vix_loader.py             # VIX CSV loader
+  models/
+    ou_estimation.py          # rolling OU parameter estimation
+    lstm_vxx.py               # LSTM/GRU dataset and model utilities
+  strategies/
+    ou_threshold.py           # signal-to-position mapping
+  plot_compare_results.py     # benchmark and comparison plots
+  plot_ou_results.py          # OU diagnostics and plots
+  run_ou_vix.py               # main OU experiment
 
+run_compare_benchmarks.py     # OU vs benchmark comparison
+run_robustness_tests.py       # OU and RNN robustness checks
+run_lstm_benchmark.py         # LSTM/GRU vs OU vs S&P benchmark
 data/
-vix_loader.py
-Load historical VIX data
+  VIX_History.csv             # historical VIX dataset
+figures/
+  ...                         # generated figures
 
-models/
-ou_estimation.py
-Rolling OU parameter estimation
-
-backtest/
-backtest_ou.py
-Mean reversion strategy implementation
-
-plot_ou_results.py
-Visualization of results
-
-run_ou_vix.py
-
-Results
-# Strategy Diagnostics
-
-## OU Mean vs Log(VIX)
-
-![OU Mean](figures/vix_ou_mean.png)
-
-Rolling Ornstein–Uhlenbeck equilibrium estimate compared to log(VIX).  
-Large deviations from the estimated equilibrium form the basis of the trading signal.
-
-
-## Z-Score Signal
-
-![Z Score](figures/ou_zscore.png)
-
-Standardized deviation of log(VIX) from the OU equilibrium.  
-Positive values indicate volatility above equilibrium, while negative values indicate volatility below equilibrium.
-
-
-## Strategy Wealth Curve
-
-![Strategy Wealth](figures/ou_wealth.png)
-
-Cumulative wealth of the OU mean-reversion strategy starting from initial capital of 1.
-
-
-## Strategy vs Benchmarks
-
-![Strategy vs Benchmarks](figures/ou_vs_benchmarks_wealth_full.png)
-
-Performance comparison between the OU strategy and major benchmarks.
-
-
-## Strategy Drawdown
-
-![Drawdown](figures/ou_wealth_drawdown.png)
-
-Drawdown profile of the strategy over the full sample.
-
-
-## Daily PnL Distribution
-
-![PnL Histogram](figures/ou_pnl_hist.png)
-
-Distribution of daily returns generated by the strategy.
-Main experiment pipeline
-Running the Experiment
-
-Execute the main script
-
-python -m run_ou_vix
-
-The pipeline will
-
-load VIX data
-
-estimate rolling OU parameters
-
-generate trading signals
-
-run the historical backtest
-
-output performance metrics and plots
-
-References
-
-Relevant research on OU processes and mean-reversion trading includes
-
-Holý, V. & Tomanová, P. (2018)
-Estimation of Ornstein–Uhlenbeck process using ultra-high-frequency data with application to intraday pairs trading strategy.
-
-Endres, S. & Stübinger, J. (2019)
-Optimal trading strategies for Lévy-driven Ornstein–Uhlenbeck processes.
-
-Wu, L. (2020)
-Analytic value function for a pairs trading strategy with a Lévy-driven Ornstein–Uhlenbeck process.
-
-Zhu, D. M., Yu, F. & Zhou, X. (2021)
-Optimal pairs trading with dynamic mean-variance objective.
-
-These works show that Ornstein–Uhlenbeck processes provide a tractable framework for modeling equilibrium-seeking financial variables and designing statistical arbitrage strategies.
-Evaluate robustness across volatility regimes, shocks, and changing parameters
-
-This combines stochastic process modeling, reinforcement learning, and financial market structure.
