@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 
 
 def plot_ou_results(
@@ -14,6 +15,7 @@ def plot_ou_results(
     z_exit=0.5,
     risky_weight=None,
     cash_weight=None,
+    signal_label="Signal",
 ):
     os.makedirs("figures", exist_ok=True)
 
@@ -28,12 +30,12 @@ def plot_ou_results(
     if cash_weight is not None:
         cash_weight = np.asarray(cash_weight, dtype=float)
 
-    # 1) VIX + OU mean
+    # 1) Signal + OU mean
     plt.figure(figsize=(12, 5))
-    plt.plot(dates, x, label="VIX", alpha=0.8)
+    plt.plot(dates, x, label=signal_label, alpha=0.8)
     mu_plot = np.clip(mu, 0.0, np.nanpercentile(mu, 99.5))
     plt.plot(dates, mu_plot, label="OU mean (μₜ)", linewidth=2)
-    plt.title("VIX and Rolling OU Mean")
+    plt.title(f"{signal_label} and Rolling OU Mean")
     plt.legend()
     plt.tight_layout()
     plt.savefig("figures/vix_ou_mean.png")
@@ -62,22 +64,46 @@ def plot_ou_results(
     plt.savefig("figures/ou_daily_pnl.png")
     plt.close()
 
-    # 4) PnL histogram
-    pnl_clean = pnl[np.isfinite(pnl)]
-    if pnl_clean.size > 10:
-        m = pnl_clean.mean()
-        s = pnl_clean.std(ddof=1)
-        skew = float(np.mean(((pnl_clean - m) / (s + 1e-12)) ** 3)) if s > 0 else 0.0
-    else:
-        skew = 0.0
+    # 4) Yearly PnL by tradable year
+    pnl_mask = np.isfinite(pnl)
+    pnl_dates = pd.to_datetime(np.asarray(dates)[pnl_mask])
+    pnl_clean = pnl[pnl_mask]
 
-    plt.figure(figsize=(8, 4))
-    plt.hist(pnl_clean, bins=80)
-    plt.axvline(0.0, linestyle="--", color="gray", alpha=0.7)
-    plt.title(f"Daily PnL Distribution (Skewness ≈ {skew:.2f})")
-    plt.tight_layout()
-    plt.savefig("figures/ou_pnl_hist.png")
-    plt.close()
+    if pnl_clean.size:
+        yearly_pnl = (
+            pd.DataFrame({"date": pnl_dates, "pnl": pnl_clean})
+            .assign(year=lambda df: df["date"].dt.year)
+            .groupby("year", sort=True)["pnl"]
+            .sum()
+        )
+
+        years = yearly_pnl.index.astype(str).tolist()
+        values = yearly_pnl.to_numpy(dtype=float)
+        colors = ["#2e8b57" if value >= 0.0 else "#c0392b" for value in values]
+
+        plt.figure(figsize=(10, 5))
+        bars = plt.bar(years, values, color=colors, alpha=0.9)
+        plt.axhline(0.0, linestyle="--", color="gray", alpha=0.7)
+        plt.title("Yearly PnL by Tradable Year")
+        plt.xlabel("Year")
+        plt.ylabel("Total PnL")
+
+        value_span = float(np.max(np.abs(values))) if values.size else 0.0
+        offset = max(value_span * 0.03, 0.002)
+
+        for bar, value in zip(bars, values):
+            x_pos = bar.get_x() + bar.get_width() / 2.0
+            if value >= 0.0:
+                y_pos = value + offset
+                va = "bottom"
+            else:
+                y_pos = value - offset
+                va = "top"
+            plt.text(x_pos, y_pos, f"{value:.3f}", ha="center", va=va, fontsize=9)
+
+        plt.tight_layout()
+        plt.savefig("figures/ou_pnl_hist.png")
+        plt.close()
 
     # 5) Wealth curve
     if wealth is None:
@@ -94,14 +120,15 @@ def plot_ou_results(
     plt.savefig("figures/ou_wealth.png")
     plt.close()
 
-    # 6) Wealth drawdown
-    peak = np.maximum.accumulate(wealth)
-    dd = (wealth / peak) - 1.0
+    # 6) Non-compounded drawdown from cumulative PnL
+    cum_pnl = np.cumsum(np.nan_to_num(pnl, nan=0.0))
+    peak = np.maximum.accumulate(cum_pnl)
+    dd = cum_pnl - peak
 
     plt.figure(figsize=(12, 4))
     plt.plot(dates, dd, color="black")
     plt.axhline(0.0, linestyle="--", color="gray", alpha=0.5)
-    plt.title("OU Strategy Wealth Drawdown")
+    plt.title("OU Strategy Drawdown (Non-Compounded)")
     plt.tight_layout()
     plt.savefig("figures/ou_wealth_drawdown.png")
     plt.close()

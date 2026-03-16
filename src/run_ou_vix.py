@@ -29,39 +29,40 @@ def max_drawdown_additive(cum: np.ndarray) -> float:
     return float(dd.min())
 
 
-def max_drawdown_wealth(w: np.ndarray) -> float:
-    w = np.asarray(w, dtype=float)
-    w = w[np.isfinite(w)]
-    if w.size < 2:
+def max_drawdown_non_compounded(r: np.ndarray) -> float:
+    r = np.asarray(r, dtype=float)
+    r = r[np.isfinite(r)]
+    if r.size < 2:
         return 0.0
-    peak = np.maximum.accumulate(w)
-    dd = w / peak - 1.0
+    cum = np.cumsum(r)
+    peak = np.maximum.accumulate(cum)
+    dd = cum - peak
     return float(dd.min())
 
 
 def run_ou_vix(
     vix_path: str = "data/VIX_History.csv",
     traded_ticker: str = "VXX",
-    traded_start: str = "2018-01-01",
+    traded_start: str = "2020-05-01",
     traded_end: str = "2026-02-07",
     dt: float = 1.0,
     window: int = 126,
-    split_date: str = "2020-01-01",
+    split_date: str = "2020-05-01",
     params: dict | None = None,
     make_plots: bool = True,
     print_report: bool = True,
 ) -> dict:
     """
     OU-based volatility strategy:
-    - estimate OU on full VIX CSV history
+    - estimate OU on the tradable signal log(VIX / VXX)
     - trade VXX when available
-    - use 2018-2019 in-sample and 2020+ out-of-sample
+    - trade on the post-COVID sample starting May 2020
     """
     if params is None:
         params = dict(
             cost_bps=1.0,
             carry_bps_per_day=0.2,
-            cash_yield_annual=0.02,
+            cash_yield_annual=0.03,
 
             exposure=1.00,
 
@@ -70,21 +71,32 @@ def run_ou_vix(
             z_cap=3.0,
 
             max_leverage=1.25,
-            vxx_short_bias=0.30,
+            vxx_short_bias=0.00,
+            max_long_leverage=0.50,
 
-            vol_target=0.012,
+            vol_target=0.014,
             vol_window=20,
-            max_vol_mult=1.75,
+            max_vol_mult=2.00,
             vol_mult_floor=0.60,
 
             kappa_min=0.01,
             hl_max=80.0,
 
-            pos_ema_alpha=1.0,
-            rebalance_thresh=0.10,
+            pos_ema_alpha=0.50,
+            rebalance_thresh=0.20,
 
-            min_hold_days=7,
-            stop_loss=0.12,
+            min_hold_days=10,
+            stop_loss=0.08,
+            trend_window=20,
+            trend_buffer=9.99,
+            long_entry_scale=1.0,
+            confidence_kappa_ref=0.08,
+            confidence_floor=1.0,
+            stop_cooldown_days=0,
+            stress_vix_level=1e9,
+            crash_vix_level=1e9,
+            stress_jump=1e9,
+            crash_jump=1e9,
         )
 
     vix_full = load_vix_csv(vix_path).astype(float).sort_index()
@@ -94,36 +106,31 @@ def run_ou_vix(
         end=traded_end,
     ).astype(float).sort_index()
 
-    x_full = np.log(vix_full.values.astype(float))
-    mu_full, kappa_full, sigma_full = rolling_ou_params(x_full, window=window, dt=dt)
-
-    ou_full = pd.DataFrame(
-        {
-            "vix": vix_full.values.astype(float),
-            "mu": mu_full,
-            "kappa": kappa_full,
-            "sigma": sigma_full,
-        },
-        index=vix_full.index,
-    )
-
     trade_df = pd.concat(
         [
-            ou_full,
+            vix_full.rename("vix"),
             traded_px.rename("traded"),
         ],
         axis=1,
     ).dropna().sort_index()
-
     trade_df = trade_df.loc[trade_df.index >= pd.to_datetime(traded_start)].copy()
 
     if trade_df.empty:
         raise ValueError("No aligned tradable sample after merging VIX history with traded asset.")
 
+    signal = np.log(trade_df["vix"].values.astype(float) / trade_df["traded"].values.astype(float))
+    mu, kappa, sigma = rolling_ou_params(signal, window=window, dt=dt)
+
+    trade_df["signal"] = signal
+    trade_df["mu"] = mu
+    trade_df["kappa"] = kappa
+    trade_df["sigma"] = sigma
+    trade_df = trade_df.dropna().copy()
+
     s = trade_df["vix"].astype(float)
     traded = trade_df["traded"].astype(float)
 
-    x = np.log(s.values.astype(float))
+    x = trade_df["signal"].values.astype(float)
     x_level = s.values.astype(float)
     traded_price = traded.values.astype(float)
 
@@ -177,17 +184,17 @@ def run_ou_vix(
         "max_dd_additive": float(max_drawdown_additive(cum)),
         "final_wealth_full": float(final_wealth_full),
         "cagr_full": float(cagr_full),
-        "max_dd_wealth_full": float(max_drawdown_wealth(wealth)),
+        "max_dd_non_compounded_full": float(max_drawdown_non_compounded(r)),
         "sharpe_train": float(sharpe(pnl_train)),
         "sharpe_test": float(sharpe(pnl_test)),
         "final_wealth_test": float(final_wealth_test),
         "cagr_test": float(cagr_test),
-        "max_dd_wealth_test": float(max_drawdown_wealth(wealth_test)),
+        "max_dd_non_compounded_test": float(max_drawdown_non_compounded(pnl_test)),
     }
 
     if print_report:
         print("=== OU VIX / VXX RUN ===")
-        print(f"Signal source: full VIX CSV history | Traded: {traded_ticker}")
+        print(f"Signal source: log(VIX / {traded_ticker}) | Traded: {traded_ticker}")
         print(f"Tradable data points: {len(x)} | Start: {s.index.min().date()} | End: {s.index.max().date()}")
         print(f"Window: {window} | dt: {dt}")
 
@@ -199,7 +206,7 @@ def run_ou_vix(
         print("\n--- Wealth process (full sample) ---")
         print(f"Final Wealth (start=1.0): {final_wealth_full:.4f}")
         print(f"CAGR: {cagr_full:.3%}")
-        print(f"Wealth Max Drawdown: {max_drawdown_wealth(wealth):.3%}")
+        print(f"Max Drawdown (non-compounded): {max_drawdown_non_compounded(r):.3%}")
 
         print("\n--- Split performance (Sharpe) ---")
         print(f"Split date: {split_date}")
@@ -209,7 +216,7 @@ def run_ou_vix(
         print("\n--- Wealth process (TEST only) ---")
         print(f"Test Final Wealth (start=1.0): {final_wealth_test:.4f}")
         print(f"Test CAGR: {cagr_test:.3%}")
-        print(f"Test Wealth Max Drawdown: {max_drawdown_wealth(wealth_test):.3%}")
+        print(f"Test Max Drawdown (non-compounded): {max_drawdown_non_compounded(pnl_test):.3%}")
 
         print("\n--- Exposure diagnostics ---")
         print(f"Average |position|: {np.mean(np.abs(pos)):.4f}")
@@ -266,7 +273,7 @@ def run_ou_vix(
     if make_plots:
         plot_ou_results(
             dates=test_dates,
-            x=x_level[test_mask],
+            x=np.exp(x)[test_mask],
             mu=np.exp(mu)[test_mask],
             z=np.asarray(res["z"], dtype=float)[test_mask],
             pnl=r[test_mask],
@@ -275,6 +282,7 @@ def run_ou_vix(
             z_exit=float(params["z_exit"]),
             risky_weight=np.asarray(res["risky_weight"], dtype=float)[test_mask],
             cash_weight=np.asarray(res["cash_weight"], dtype=float)[test_mask],
+            signal_label=f"VIX / {traded_ticker}",
         )
 
         plot_wealth_vs_vix(
@@ -289,6 +297,7 @@ def run_ou_vix(
     return {
         "dates": s.index,
         "series": s,
+        "signal_series": pd.Series(x, index=s.index, name=f"log(VIX/{traded_ticker})"),
         "traded_series": traded,
         "x_level": x_level,
         "x_log": x,
@@ -312,10 +321,3 @@ def run_ou_vix(
 
 if __name__ == "__main__":
     run_ou_vix()
-
-
-
-
-
-
-

@@ -23,8 +23,9 @@ def banded_position_from_z(
     z_entry: float = 1.25,
     z_exit: float = 0.35,
     z_cap: float = 3.0,
-    max_leverage: float = 1.25,
-    vxx_short_bias: float = 0.30,
+    max_leverage: float = 0.90,
+    vxx_short_bias: float = 0.00,
+    max_long_leverage: float = 0.50,
 ) -> float:
     """
     Symmetric OU overlay around a structural short-VXX bias.
@@ -48,6 +49,9 @@ def banded_position_from_z(
     z_cap = float(z_cap)
     max_leverage = float(max_leverage)
     vxx_short_bias = float(vxx_short_bias)
+    max_long_leverage = float(max_long_leverage)
+
+    max_long_leverage = np.clip(max_long_leverage, 0.0, max_leverage)
 
     # Cap bias so it cannot exceed max leverage
     vxx_short_bias = min(vxx_short_bias, max_leverage)
@@ -76,9 +80,9 @@ def banded_position_from_z(
             scaled = (az - z_entry) / max(1e-12, (z_cap - z_entry))
             scaled = float(np.clip(scaled, 0.0, 1.0))
 
-        # Range goes from -short_bias up to +max_leverage
-        pos = -vxx_short_bias + scaled * (max_leverage + vxx_short_bias)
-        return float(np.clip(pos, -max_leverage, max_leverage))
+        # Range goes from -short_bias up to a capped long-VXX exposure.
+        pos = -vxx_short_bias + scaled * (max_long_leverage + vxx_short_bias)
+        return float(np.clip(pos, -max_leverage, max_long_leverage))
 
     # Intermediate region between exit and entry:
     # smoothly transition from baseline short bias toward directional tilt
@@ -91,6 +95,5 @@ def banded_position_from_z(
     # z < -z_exit
     frac = (abs(z) - z_exit) / max(1e-12, (z_entry - z_exit))
     frac = float(np.clip(frac, 0.0, 1.0))
-    pos = -vxx_short_bias + frac * (0.50 * max_leverage + vxx_short_bias)
-    return float(np.clip(pos, -max_leverage, max_leverage))
-
+    pos = -vxx_short_bias + frac * (0.50 * max_long_leverage + vxx_short_bias)
+    return float(np.clip(pos, -max_leverage, max_long_leverage))

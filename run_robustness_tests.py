@@ -3,13 +3,32 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
+from src.data.market_loader import load_yahoo_adjclose
+from src.data.vix_loader import load_vix_csv
+from src.models.lstm_vxx import (
+    backtest_lstm_probabilities,
+    build_lstm_feature_frame,
+    prepare_lstm_dataset,
+    train_gru_classifier,
+    train_lstm_classifier,
+)
 from src.run_ou_vix import run_ou_vix
 
 
 CORE_FILES = [
     Path("src/backtest/backtest_ou.py"),
     Path("src/run_ou_vix.py"),
+    Path("src/models/lstm_vxx.py"),
+    Path("run_lstm_benchmark.py"),
 ]
+
+RNN_DATA_START = "2018-01-01"
+RNN_TRADED_START = "2020-05-01"
+RNN_TRADED_END = "2026-02-07"
+RNN_SPLIT_DATE = "2022-05-01"
 
 
 def file_sha256(path: Path) -> str:
@@ -34,12 +53,136 @@ def run_case(label: str, *, split_date: str = "2020-01-01", params_override: dic
         "split_date": split_date,
         "cagr": float(metrics["cagr_full"]),
         "sharpe": float(metrics["sharpe_full"]),
-        "maxdd": float(metrics["max_dd_wealth_full"]),
+        "maxdd": float(metrics["max_dd_non_compounded_full"]),
         "wealth": float(metrics["final_wealth_full"]),
         "test_cagr": float(metrics["cagr_test"]),
         "test_sharpe": float(metrics["sharpe_test"]),
-        "test_maxdd": float(metrics["max_dd_wealth_test"]),
+        "test_maxdd": float(metrics["max_dd_non_compounded_test"]),
         "test_wealth": float(metrics["final_wealth_test"]),
+    }
+
+
+def _cagr_from_wealth(wealth: np.ndarray, dates: pd.DatetimeIndex) -> float:
+    wealth = np.asarray(wealth, dtype=float)
+    if wealth.size < 2:
+        return 0.0
+    years = (dates[-1] - dates[0]).days / 365.25
+    final = float(wealth[-1])
+    return float(final ** (1.0 / years) - 1.0) if years > 0 and final > 0 else 0.0
+
+
+def _sharpe_from_pnl(pnl: np.ndarray) -> float:
+    pnl = np.asarray(pnl, dtype=float)
+    pnl = pnl[np.isfinite(pnl)]
+    if pnl.size < 2:
+        return 0.0
+    std = pnl.std(ddof=1)
+    if std <= 0:
+        return 0.0
+    return float(np.sqrt(252.0) * pnl.mean() / std)
+
+
+def _max_dd_non_compounded(pnl: np.ndarray) -> float:
+    pnl = np.asarray(pnl, dtype=float)
+    pnl = pnl[np.isfinite(pnl)]
+    if pnl.size < 2:
+        return 0.0
+    cum = np.cumsum(pnl)
+    peak = np.maximum.accumulate(cum)
+    return float((cum - peak).min())
+
+
+def run_rnn_case(
+    label: str,
+    *,
+    trainer,
+    seed: int = 42,
+    split_date: str = RNN_SPLIT_DATE,
+    cost_bps: float = 1.0,
+    ensemble: bool = False,
+) -> dict:
+    vix = load_vix_csv("data/VIX_History.csv").astype(float).sort_index()
+    vxx = load_yahoo_adjclose("VXX", start=RNN_DATA_START, end=RNN_TRADED_END).astype(float).sort_index()
+
+    feature_df = build_lstm_feature_frame(vix=vix, traded=vxx)
+    feature_cols = [
+        "log_vix",
+        "log_traded",
+        "log_vix_over_traded",
+        "vix_ret_1",
+        "traded_ret_1",
+        "vix_ret_5",
+        "traded_ret_5",
+        "vix_ret_20",
+        "traded_ret_20",
+        "vix_vol_20",
+        "traded_vol_20",
+    ]
+    ds = prepare_lstm_dataset(
+        feature_df=feature_df,
+        feature_cols=feature_cols,
+        sequence_length=60,
+        split_date=split_date,
+        target_col="target_ret_5d",
+    )
+    y_class = np.where(ds["y"] > 0.01, 1.0, np.where(ds["y"] < -0.01, 0.0, np.nan))
+    valid_mask = np.isfinite(y_class)
+    ds = {
+        **ds,
+        "x": ds["x"][valid_mask],
+        "y": ds["y"][valid_mask],
+        "dates": ds["dates"][valid_mask],
+        "traded_price": ds["traded_price"][valid_mask],
+        "train_mask": ds["train_mask"][valid_mask],
+    }
+    y_class = y_class[valid_mask].astype(np.float32)
+
+    seeds = [7, 42, 99] if ensemble else [seed]
+    prob_up_list = []
+    for fit_seed in seeds:
+        model = trainer(
+            x_train=ds["x"][ds["train_mask"]],
+            y_train=y_class[ds["train_mask"]],
+            seed=fit_seed,
+            epochs=20,
+            batch_size=32,
+        )
+        prob_up_list.append(model.predict(ds["x"], verbose=0).reshape(-1))
+    prob_up = np.mean(np.vstack(prob_up_list), axis=0)
+    trade_cfg = (
+        dict(max_leverage=0.30, probability_scale=4.0, deadband=0.10)
+        if trainer is train_lstm_classifier
+        else dict(max_leverage=0.60, probability_scale=6.0, deadband=0.10)
+    )
+
+    bt = backtest_lstm_probabilities(
+        dates=ds["dates"],
+        traded_price=ds["traded_price"],
+        probability_up=prob_up,
+        cash_yield_annual=0.03,
+        cost_bps=cost_bps,
+        max_leverage=trade_cfg["max_leverage"],
+        probability_scale=trade_cfg["probability_scale"],
+        deadband=trade_cfg["deadband"],
+        pos_ema_alpha=0.50,
+        rebalance_thresh=0.05,
+    )
+
+    test_mask = ds["dates"] >= pd.to_datetime(split_date)
+    test_dates = ds["dates"][test_mask]
+    wealth_test = np.asarray(bt["wealth"], dtype=float)[test_mask]
+    wealth_test = wealth_test / float(wealth_test[0]) if wealth_test.size else np.array([1.0])
+    pnl_test = np.asarray(bt["pnl"], dtype=float)[test_mask]
+
+    return {
+        "label": label,
+        "split_date": split_date,
+        "seed": seed,
+        "cost_bps": cost_bps,
+        "test_cagr": _cagr_from_wealth(wealth_test, test_dates),
+        "test_sharpe": _sharpe_from_pnl(pnl_test),
+        "test_maxdd": _max_dd_non_compounded(pnl_test),
+        "test_wealth": float(wealth_test[-1]) if wealth_test.size else 1.0,
     }
 
 
@@ -122,6 +265,36 @@ def main() -> None:
     for label, split_date in walk_forward_splits:
         walk_forward_results.append(run_case(label, split_date=split_date))
     print_table("WALK FORWARD TEST", "SPLIT YEAR", walk_forward_results, test_metrics=True)
+
+    lstm_seed_results = []
+    gru_seed_results = []
+    for seed in [7, 42, 99]:
+        lstm_seed_results.append(run_rnn_case(f"LSTM_SEED_{seed}", trainer=train_lstm_classifier, seed=seed))
+        gru_seed_results.append(run_rnn_case(f"GRU_SEED_{seed}", trainer=train_gru_classifier, seed=seed))
+    print_table("LSTM SEED ROBUSTNESS", "MODEL", lstm_seed_results, test_metrics=True)
+    print_table("GRU SEED ROBUSTNESS", "MODEL", gru_seed_results, test_metrics=True)
+
+    rnn_ensemble_results = [
+        run_rnn_case("LSTM_ENSEMBLE", trainer=train_lstm_classifier, ensemble=True),
+        run_rnn_case("GRU_ENSEMBLE", trainer=train_gru_classifier, ensemble=True),
+    ]
+    print_table("RNN ENSEMBLE TEST", "MODEL", rnn_ensemble_results, test_metrics=True)
+
+    rnn_late_split_results = [
+        run_rnn_case("LSTM_SPLIT_2023", trainer=train_lstm_classifier, split_date="2023-05-01", ensemble=True),
+        run_rnn_case("GRU_SPLIT_2023", trainer=train_gru_classifier, split_date="2023-05-01", ensemble=True),
+    ]
+    print_table("RNN LATER SPLIT TEST", "MODEL", rnn_late_split_results, test_metrics=True)
+
+    rnn_cost_results = [
+        run_rnn_case("LSTM_COST_1", trainer=train_lstm_classifier, cost_bps=1.0, ensemble=True),
+        run_rnn_case("LSTM_COST_5", trainer=train_lstm_classifier, cost_bps=5.0, ensemble=True),
+        run_rnn_case("LSTM_COST_10", trainer=train_lstm_classifier, cost_bps=10.0, ensemble=True),
+        run_rnn_case("GRU_COST_1", trainer=train_gru_classifier, cost_bps=1.0, ensemble=True),
+        run_rnn_case("GRU_COST_5", trainer=train_gru_classifier, cost_bps=5.0, ensemble=True),
+        run_rnn_case("GRU_COST_10", trainer=train_gru_classifier, cost_bps=10.0, ensemble=True),
+    ]
+    print_table("RNN TRANSACTION COST TEST", "MODEL", rnn_cost_results, test_metrics=True)
 
     end_hashes = snapshot_hashes(CORE_FILES)
     if start_hashes != end_hashes:

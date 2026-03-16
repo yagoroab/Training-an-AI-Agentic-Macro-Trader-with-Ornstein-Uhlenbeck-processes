@@ -23,8 +23,9 @@ def _to_series(obj, name: str) -> pd.Series:
 
 
 def _align_series(ou_wealth: pd.Series, benchmarks_wealth: dict[str, pd.Series]) -> pd.DataFrame:
-    ou_wealth = _to_series(ou_wealth, "OU Strategy")
-    df = pd.DataFrame({"OU Strategy": ou_wealth})
+    primary_name = ou_wealth.name if getattr(ou_wealth, "name", None) is not None else "OU Strategy"
+    ou_wealth = _to_series(ou_wealth, primary_name)
+    df = pd.DataFrame({primary_name: ou_wealth})
 
     for name, s in benchmarks_wealth.items():
         df[name] = _to_series(s, name)
@@ -35,8 +36,9 @@ def _align_series(ou_wealth: pd.Series, benchmarks_wealth: dict[str, pd.Series])
 
 def _to_drawdown(wealth: pd.Series) -> pd.Series:
     w = _to_series(wealth, wealth.name if wealth.name is not None else "wealth")
-    peak = w.cummax()
-    dd = (w / peak) - 1.0
+    cum_pnl = _daily_returns_from_wealth(w).cumsum()
+    peak = cum_pnl.cummax()
+    dd = cum_pnl - peak
     dd.name = f"{w.name}_drawdown"
     return dd
 
@@ -128,7 +130,7 @@ def plot_drawdown_comparison(
 
     plt.title(title)
     plt.xlabel("Date")
-    plt.ylabel("Drawdown")
+    plt.ylabel("Drawdown (non-compounded)")
     plt.legend()
     plt.tight_layout()
     plt.savefig(outpath, dpi=200)

@@ -7,7 +7,6 @@ from src.data.market_loader import load_yahoo_adjclose, prices_to_wealth
 from src.plot_compare_results import (
     plot_wealth_comparison,
     plot_drawdown_comparison,
-    plot_excess_vs_benchmark,
     print_annualized_table,
 )
 
@@ -33,7 +32,7 @@ def main():
     ou_params = dict(
         cost_bps=1.0,
         carry_bps_per_day=0.2,
-        cash_yield_annual=0.02,
+        cash_yield_annual=0.03,
 
         exposure=1.00,
 
@@ -42,26 +41,39 @@ def main():
         z_cap=3.0,
 
         max_leverage=1.25,
-        vxx_short_bias=0.30,
+        vxx_short_bias=0.00,
+        max_long_leverage=0.50,
 
-        vol_target=0.012,
+        vol_target=0.014,
         vol_window=20,
-        max_vol_mult=1.75,
+        max_vol_mult=2.00,
         vol_mult_floor=0.60,
 
         kappa_min=0.01,
         hl_max=80.0,
 
-        pos_ema_alpha=1.0,
-        rebalance_thresh=0.10,
+        pos_ema_alpha=0.50,
+        rebalance_thresh=0.20,
+        min_hold_days=10,
+        stop_loss=0.08,
+        trend_window=20,
+        trend_buffer=9.99,
+        long_entry_scale=1.0,
+        confidence_kappa_ref=0.08,
+        confidence_floor=1.0,
+        stop_cooldown_days=0,
+        stress_vix_level=1e9,
+        crash_vix_level=1e9,
+        stress_jump=1e9,
+        crash_jump=1e9,
     )
 
     ou_out = run_ou_vix(
         vix_path="data/VIX_History.csv",
         traded_ticker="VXX",
-        traded_start="2018-01-01",
+        traded_start="2020-05-01",
         traded_end="2026-02-07",
-        split_date="2020-01-01",
+        split_date="2020-05-01",
         params=ou_params,
         make_plots=False,
         print_report=False,
@@ -136,14 +148,6 @@ def main():
         title="Drawdown Comparison: OU Strategy vs VXX Buy & Hold and S&P 500",
     )
 
-    plot_excess_vs_benchmark(
-        ou_wealth=ou_wealth,
-        benchmark_wealth=bench_wealth["VXX Buy & Hold"],
-        outpath_ratio=f"figures/ou_over_vxx_ratio_{tag}.png",
-        outpath_log_ratio=f"figures/ou_over_vxx_logratio_{tag}.png",
-        benchmark_name="VXX Buy & Hold",
-    )
-
     print_annualized_table(
         ou_wealth=ou_wealth,
         benchmarks_wealth=bench_wealth,
@@ -155,8 +159,6 @@ def main():
     print(f"- figures/ou_vs_vxx_wealth_{tag}.png")
     print(f"- figures/ou_vs_sp500_wealth_{tag}.png")
     print(f"- figures/ou_vs_benchmarks_drawdown_{tag}.png")
-    print(f"- figures/ou_over_vxx_ratio_{tag}.png")
-    print(f"- figures/ou_over_vxx_logratio_{tag}.png")
 
 
 if __name__ == "__main__":
