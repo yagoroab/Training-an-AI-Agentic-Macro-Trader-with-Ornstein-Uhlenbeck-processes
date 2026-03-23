@@ -24,7 +24,7 @@ from src.run_ou_vix import run_ou_vix
 RNN_DATA_START = "2018-01-01"
 TRADED_START = "2020-05-01"
 MODEL_SPLIT_DATE = "2022-05-01"
-TRADED_END = "2026-02-07"
+TRADED_END = "2025-07-31"
 
 
 def _to_series(obj, name: str) -> pd.Series:

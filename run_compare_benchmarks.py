@@ -28,6 +28,8 @@ def _to_series(obj, name: str) -> pd.Series:
 
 def main():
     USE_TEST_ONLY = False
+    TRADING_END = "2025-07-31"
+    PLOT_END = "2025-07-31"
 
     ou_params = dict(
         cost_bps=1.0,
@@ -72,7 +74,7 @@ def main():
         vix_path="data/VIX_History.csv",
         traded_ticker="VXX",
         traded_start="2020-05-01",
-        traded_end="2026-02-07",
+        traded_end=TRADING_END,
         split_date="2020-05-01",
         params=ou_params,
         make_plots=False,
@@ -92,8 +94,8 @@ def main():
     ou_wealth = ou_wealth / float(ou_wealth.iloc[0])
 
     start = str(ou_wealth.index.min().date())
-    end = str(ou_wealth.index.max().date())
-    print(f"Master date range: {start} -> {end} ({tag})")
+    print(f"Trading date range: {start} -> {ou_wealth.index.max().date()} ({tag})")
+    print(f"Plot date range: {start} -> {PLOT_END} ({tag})")
 
     benchmarks = {
         "VXX Buy & Hold": "VXX",
@@ -102,12 +104,18 @@ def main():
 
     bench_wealth = {}
     for label, ticker in benchmarks.items():
-        px = load_yahoo_adjclose(ticker, start=start, end=end)
+        px = load_yahoo_adjclose(ticker, start=start, end=PLOT_END)
         px = _to_series(px, name=label)
         w = prices_to_wealth(px)
         w = _to_series(w, name=label)
         w = w / float(w.iloc[0])
         bench_wealth[label] = w
+
+    comparison_index = ou_wealth.index
+    for w in bench_wealth.values():
+        comparison_index = comparison_index.union(w.index)
+    comparison_index = comparison_index.sort_values()
+    ou_wealth = ou_wealth.reindex(comparison_index).ffill()
 
     plot_wealth_comparison(
         ou_wealth=ou_wealth,
