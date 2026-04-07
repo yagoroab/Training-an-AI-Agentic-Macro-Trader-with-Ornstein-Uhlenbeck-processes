@@ -7,17 +7,17 @@ Everything that defines the baseline must live here (single source of truth).
 
 # Data / OU estimation
 OU_WINDOW = 126
-DT = 1.0  # daily steps
+DT = 1.0 
 
-# Signal thresholds (hysteresis)
+# Signal thresholds 
 ENTRY_Z = 1.5
 EXIT_Z = 0.8
 Z_CAP = 3.0
 
-# Costs (IMPORTANT: store in BPS to match backtest_ou signature)
-COST_BPS = 5.0  # 5 bps per unit position change
+# Costs 
+COST_BPS = 5.0 
 
-# Train/test split (used only for reporting metrics)
+# Train/test split 
 SPLIT_DATE = "2006-01-01"
 
 # Positioning / exposure
