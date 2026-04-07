@@ -44,7 +44,7 @@ def run_ou_vix(
     vix_path: str = "data/VIX_History.csv",
     traded_ticker: str = "VXX",
     traded_start: str = "2020-05-01",
-    traded_end: str = "2026-02-07",
+    traded_end: str = "2025-07-31",
     dt: float = 1.0,
     window: int = 126,
     split_date: str = "2020-05-01",
@@ -113,7 +113,10 @@ def run_ou_vix(
         ],
         axis=1,
     ).dropna().sort_index()
-    trade_df = trade_df.loc[trade_df.index >= pd.to_datetime(traded_start)].copy()
+    trade_df = trade_df.loc[
+        (trade_df.index >= pd.to_datetime(traded_start))
+        & (trade_df.index <= pd.to_datetime(traded_end))
+    ].copy()
 
     if trade_df.empty:
         raise ValueError("No aligned tradable sample after merging VIX history with traded asset.")
